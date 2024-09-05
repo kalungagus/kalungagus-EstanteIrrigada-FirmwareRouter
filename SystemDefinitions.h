@@ -18,24 +18,9 @@
 //==================================================================================================
 // Configurações
 //==================================================================================================
-#define SERIAL_SEND_HEADER            1
-#define MAX_PACKET_SIZE               50
-#define MESSAGE_QUEUE_SIZE            10
 #define MAX_CONNECTION_IDLE_STATUS    5
 #define MAX_DISCONNECTED_MESSAGES     10
 
-#define DEBUG_PIN                     26
-#define VALVE_PIN                     15
-
-//--------------------------------------------------------------------------------------------------
-// Sensores
-//--------------------------------------------------------------------------------------------------
-#define SENS_1                ADC1_CHANNEL_0
-#define SENS_2                ADC1_CHANNEL_3
-#define SENS_3                ADC1_CHANNEL_6
-#define SENS_4                ADC1_CHANNEL_7
-#define SENS_5                ADC1_CHANNEL_4
-#define SENS_6                ADC1_CHANNEL_5
 //--------------------------------------------------------------------------------------------------
 // Parâmetros de SSID e Senha de rede
 //--------------------------------------------------------------------------------------------------
@@ -53,16 +38,5 @@
 // Credenciais de rede
 //--------------------------------------------------------------------------------------------------
 #include "Security.h"
-
-//==================================================================================================
-// Tipos de dados padrão para todo o projeto
-//==================================================================================================
-typedef struct
-{
-  unsigned char state;
-  unsigned char messageSize;
-  unsigned char bytesReaded;
-  char packet[MAX_PACKET_SIZE];
-} serialBuffer;
 
 #endif

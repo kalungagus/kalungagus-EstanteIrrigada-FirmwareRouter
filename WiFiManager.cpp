@@ -5,68 +5,31 @@
 #include <NetBIOS.h>
 #include <AsyncUDP.h>
 #include "SystemDefinitions.h"
-#include "SerialManager.h"
-#include "System.h"
-
-//==================================================================================================
-// Macros
-//==================================================================================================
-#define DEBUG()           digitalWrite(DEBUG_PIN, !digitalRead(DEBUG_PIN))
-
-//==================================================================================================
-// Funções do módulo, declaradas aqui para melhor organização do arquivo
-//==================================================================================================
-void initWiFiManager(uint8_t wifiState);
-void connectToWiFi(void);
-void taskCheckWiFiStatus(void *);
-bool isWiFiConnected(void);
-void resetWiFiConnection(void);
-void setupWiFi(void);
-void transmissionScheduler(void *);
-void listNetworks(void);
-void printEncryptionType(int thisType);
-void udpProcessing(void *pvParameters);
+#include "MessageManager.h"
 
 //==================================================================================================
 // Variáveis do módulo
 //==================================================================================================
 xTaskHandle taskOnline;
 xTaskHandle taskOffline;
-xTaskHandle taskUdp;
-
-extern QueueHandle_t messageQueue;
+AsyncUDP udp;
 
 int connectionIdleCounter = 0;
 int disconnectedCounter = 0;
 bool connectedToClient=false;
 
-AsyncUDP udp;
-serialBuffer wifiReceivedData;
-
 //==================================================================================================
 // Funções
 //==================================================================================================
-void initWiFiManager(uint8_t wifiState)
+// Detalhes em https://github.com/esp8266/Arduino/issues/4352
+void setupWiFi(void)
 {
-  sendMessageWithNewLine("Configurando gerenciador de WiFi.", DIRECT_TO_SERIAL);
-  memset(&wifiReceivedData, 0, sizeof(wifiReceivedData));
-
-  xTaskCreate(taskCheckWiFiStatus, "CheckWiFiStatus", 8192, NULL, 1, &taskOffline);
-  if(wifiState == 0)
-    vTaskSuspend(taskOffline);
-  xTaskCreate(transmissionScheduler, "TransmissionScheduler", 8192, NULL, 1, &taskOnline);
-  vTaskSuspend(taskOnline);
-  xTaskCreate(udpProcessing, "udpProcessing", 2000, NULL, 1, &taskUdp);
-  vTaskSuspend(taskUdp);
-
-  sendMessageWithNewLine("Gerenciador de WiFi configurado.", DIRECT_TO_SERIAL);
-  if(wifiState == 0)
-    sendMessageWithNewLine("Clique em ativar WiFi para iniciar conexao.", DIRECT_TO_SERIAL);
-  else
-  {
-    sendMessageWithNewLine("Iniciar conexao...", DIRECT_TO_SERIAL);
-    setupWiFi();
-  }
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.disconnect(true);
+  delay(100);
+  WiFi.setAutoReconnect(false);
+  if( WiFi.getAutoReconnect() ) WiFi.setAutoReconnect( false );
 }
 
 bool isWiFiConnected(void)
@@ -89,17 +52,46 @@ void resetWiFiConnection(void)
   vTaskResume(taskOffline);
 }
 
+void connectToWiFi(void)
+{
+  char ssid[SSID_LENGHT] = DEFAULT_SSID;
+  char password[PASSWORD_LENGTH] = DEFAULT_PASSWORD;
+  String hostname = DEFAULT_HOSTNAME;
+
+  sendMessageWithNewLine("Iniciando conexao com Wifi", DIRECT_TO_SERIAL);
+  WiFi.setHostname(hostname.c_str());
+  WiFi.begin(ssid, password);
+  delay(500);
+  NBNS.begin(hostname.c_str());
+}
+
+void setupUDP(void)
+{
+  if(udp.listen(30000)) 
+  {
+    udp.onPacket([](AsyncUDPPacket packet) {
+      if(packet.isBroadcast())
+      {
+        if(packet.length() == 3 && packet.data()[0] == 'S' && packet.data()[1] == 'C' && packet.data()[2] == 'H')
+        {
+          IPAddress myIP = WiFi.localIP();
+          unsigned char decodedIP[7] = {'S', 'C', 'H', myIP[0], myIP[1], myIP[2], myIP[3]};
+          
+          sendMessageWithNewLine("Broadcast recebido.", DIRECT_TO_SERIAL);
+          udp.broadcastTo(decodedIP, 7, 30000);
+        }
+      }
+    });
+  }
+}
+
 void taskCheckWiFiStatus(void *pvParameters)
 {
-  char s[16];
-  int updatedWiFiStatus;
-  wl_status_t wifiStatus;
-
   for(;;)
   {
     vTaskDelay( 5000 / portTICK_PERIOD_MS );
-    wifiStatus = WiFi.status();
-    switch(wifiStatus)
+    
+    switch(WiFi.status())
     {
       case WL_CONNECTED:
         sendMessageWithNewLine("WiFi conectado.", DIRECT_TO_SERIAL);
@@ -108,8 +100,8 @@ void taskCheckWiFiStatus(void *pvParameters)
         sendMessage("Hostname: ", DIRECT_TO_SERIAL);
         sendMessageWithNewLine(WiFi.getHostname(), DIRECT_TO_SERIAL);
         vTaskResume(taskOnline);
-        vTaskResume(taskUdp);
-        vTaskSuspend(taskOffline);
+        setupUDP();
+        vTaskSuspend(NULL);   // A task se suspende
         break;
       case WL_NO_SHIELD:
         sendMessageWithNewLine("WL_NO_SHIELD retornado.", DIRECT_TO_SERIAL);
@@ -157,95 +149,14 @@ void taskCheckWiFiStatus(void *pvParameters)
         connectToWiFi();
         break;
       default:
-        snprintf(s, 16, "%d", wifiStatus);
-        sendMessage("WiFi.status() retornou ", DIRECT_TO_SERIAL);
-        sendMessage(s, DIRECT_TO_SERIAL);
-        sendMessageWithNewLine(" para o modulo.", DIRECT_TO_SERIAL);
         break;
-    }
-  }
-}
-
-// Detalhes em https://github.com/esp8266/Arduino/issues/4352
-void setupWiFi(void)
-{
-  WiFi.mode(WIFI_STA);
-  WiFi.persistent(false);
-  WiFi.disconnect(true);
-  delay(100);
-  WiFi.setAutoReconnect(false);
-  if( WiFi.getAutoReconnect() ) WiFi.setAutoReconnect( false );
-}
-
-void connectToWiFi(void)
-{
-  char ssid[SSID_LENGHT] = DEFAULT_SSID;
-  char password[PASSWORD_LENGTH] = DEFAULT_PASSWORD;
-  String hostname = DEFAULT_HOSTNAME;
-
-  sendMessageWithNewLine("Iniciando conexao com Wifi", DIRECT_TO_SERIAL);
-  WiFi.setHostname(hostname.c_str());
-  WiFi.begin(ssid, password);
-  delay(500);
-  NBNS.begin(hostname.c_str());
-}
-
-void setWifiOn(void)
-{
-  sendMessageWithNewLine("Ligando Wifi.", DIRECT_TO_SERIAL);
-  vTaskResume(taskOffline);
-  setupWiFi();
-}
-
-void setWiFiOff(void)
-{
-  sendMessageWithNewLine("Desligando Wifi.", DIRECT_TO_SERIAL);
-
-  if(isWiFiConnected())
-  {
-    WiFi.disconnect();
-    vTaskSuspend(taskOnline);
-  }
-
-  vTaskSuspend(taskOffline);
-  WiFi.mode(WIFI_OFF);
-  sendMessageWithNewLine("Wifi desligada.", DIRECT_TO_SERIAL);
-}
-
-void listNetworks(void) 
-{
-  char s[16];
-  sendMessageWithNewLine("** Scan Networks **", DIRECT_TO_SERIAL);
-  int numSsid = WiFi.scanNetworks();
-  if (numSsid == -1) 
-  {
-    sendMessageWithNewLine("Nao encontrou conexao de rede.", DIRECT_TO_SERIAL);
-  }
-  else
-  {
-    sendMessage("Redes disponiveis:", DIRECT_TO_SERIAL);
-    snprintf(s, 16, "%d", numSsid);
-    sendMessageWithNewLine(s, DIRECT_TO_SERIAL);
-  
-    for (int thisNet = 0; thisNet < numSsid; thisNet++) 
-    {
-      sendMessage(String(thisNet), DIRECT_TO_SERIAL);
-      sendMessage(") ", DIRECT_TO_SERIAL);
-      sendMessage(WiFi.SSID(thisNet), DIRECT_TO_SERIAL);
-      sendMessage("\tSignal: ", DIRECT_TO_SERIAL);
-      snprintf(s, 16, "%d", WiFi.RSSI(thisNet));
-      sendMessage(s, DIRECT_TO_SERIAL);
-      sendMessage(" dBm", DIRECT_TO_SERIAL);
-      sendMessage("\tEncryption: ", DIRECT_TO_SERIAL);
-      snprintf(s, 16, "%d", WiFi.encryptionType(thisNet));
-      sendMessageWithNewLine(s, DIRECT_TO_SERIAL);
-      vTaskDelay( 50 / portTICK_PERIOD_MS );
     }
   }
 }
 
 void transmissionScheduler(void *pvParameters)
 {
+  commInterface_t *manager = (commInterface_t *)pvParameters;
   WiFiServer server(5000);
   WiFiClient client;
   char txPacket[MAX_PACKET_SIZE];
@@ -260,9 +171,9 @@ void transmissionScheduler(void *pvParameters)
     {
       sendMessageWithNewLine("Conexao com cliente estabelecida.", DIRECT_TO_SERIAL);
       connectedToClient = true;
-      while (client.connected()) 
+      while (client.connected())
       {
-        if(xQueueReceive(messageQueue, &txPacket, (TickType_t)0) == pdPASS)
+        if(xQueueReceive(manager->transmissionQueue, &txPacket, (TickType_t)0) == pdPASS)
         {
           int length = txPacket[2] + 3;
           
@@ -273,7 +184,7 @@ void transmissionScheduler(void *pvParameters)
         if(client.available())
         {
           char receivedData = client.read();
-          processCharReception(receivedData, &wifiReceivedData);
+          processCharReception(receivedData, manager);
         }
         
         vTaskDelay( 10 / portTICK_PERIOD_MS );
@@ -289,31 +200,18 @@ void transmissionScheduler(void *pvParameters)
   }
 }
 
-void udpProcessing(void *pvParameters)
+void initWiFiManager(commInterface_t *manager)
 {
-  sendMessageWithNewLine("Task udp iniciada.", DIRECT_TO_SERIAL);
+  sendMessageWithNewLine("Configurando gerenciador de WiFi.", DIRECT_TO_SERIAL);
 
-  for(;;)
-  {
-    if(udp.listen(30000)) 
-    {
-      udp.onPacket([](AsyncUDPPacket packet) {
-        if(packet.isBroadcast())
-        {
-          if(packet.length() == 3 && packet.data()[0] == 'S' && packet.data()[1] == 'C' && packet.data()[2] == 'H')
-          {
-            IPAddress myIP = WiFi.localIP();
-            unsigned char decodedIP[7] = {'S', 'C', 'H', myIP[0], myIP[1], myIP[2], myIP[3]};
-            
-            sendMessageWithNewLine("Broadcast recebido.", DIRECT_TO_SERIAL);
-            udp.broadcastTo(decodedIP, 7, 30000);
-          }
-        }
-      });
-    }
-    else
-      vTaskDelay( 100 / portTICK_PERIOD_MS );
-  }
+  setupWiFi();
+
+  xTaskCreate(taskCheckWiFiStatus, "CheckWiFiStatus", 8192, NULL, 1, &taskOffline);
+  xTaskCreate(transmissionScheduler, "TransmissionScheduler", 8192, manager, 1, &taskOnline);
+  vTaskSuspend(taskOnline);
+
+  sendMessageWithNewLine("Gerenciador de WiFi configurado.", DIRECT_TO_SERIAL);
+  sendMessageWithNewLine("Iniciar conexao...", DIRECT_TO_SERIAL);
 }
 
 //==================================================================================================

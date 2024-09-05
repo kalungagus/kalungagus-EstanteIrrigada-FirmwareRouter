@@ -1,17 +1,14 @@
 //==================================================================================================
 // Includes
 //==================================================================================================
-#include "SystemDefinitions.h"
-#include "SerialManager.h"
-#include "System.h"
 #include <SPI.h>
 #include <LoRa.h>
+#include "SystemDefinitions.h"
+#include "MessageManager.h"
 
 //==================================================================================================
 // Variáveis do módulo
 //==================================================================================================
-QueueHandle_t messageLoRaQueue;
-serialBuffer loraSerialBuffer;
 SemaphoreHandle_t loraSemaphore = xSemaphoreCreateMutex();
 xTaskHandle taskLoRaReceiveHandle;
 
@@ -19,12 +16,6 @@ xTaskHandle taskLoRaReceiveHandle;
 const int csPin = 5;           // Chip Select (Slave Select do protocolo SPI) do modulo Lora
 const int resetPin = 15;       // Reset do modulo LoRa
 const int irqPin = 21;         // Pino DI0
-
-//==================================================================================================
-// Funções do módulo, declaradas aqui para melhor organização do arquivo
-//==================================================================================================
-static void taskLoRaReceive(void *);
-static void taskLoRaSend(void *);
 
 //==================================================================================================
 // Vetores de interrupção
@@ -39,39 +30,16 @@ void onLoRaReceive(int packetSize)
 //==================================================================================================
 // Funções
 //==================================================================================================
-void initLoRaManager(void)
-{
-  memset(&loraSerialBuffer, 0, sizeof(loraSerialBuffer));
-  
-  LoRa.setPins(csPin, resetPin, irqPin);
-
-  if (!LoRa.begin(433E6)) 
-  {
-    sendMessageWithNewLine("Erro ao iniciar modulo LoRa. Verifique a coenxao dos seus pinos!! ", PRIORITY_SELECT);
-    while (true);
-  }
-  sendMessageWithNewLine("Modulo LoRa iniciado com sucesso!!! :) ", PRIORITY_SELECT);
-  messageLoRaQueue = xQueueCreate(MESSAGE_QUEUE_SIZE, MAX_PACKET_SIZE);
-  xTaskCreate(taskLoRaSend, "LoRaSend", 8192, NULL, 2, NULL);
-  xTaskCreate(taskLoRaReceive, "LoRaEvent", 8192, NULL, 2, &taskLoRaReceiveHandle);
-  vTaskSuspend(taskLoRaReceiveHandle);
-  LoRa.onReceive(onLoRaReceive);
-  LoRa.receive();
-}
-
-void sendRawLoRaBuffer(char *buff)
-{
-  xQueueSend(messageLoRaQueue, (void *)buff, (TickType_t)0);
-}
-
 static void taskLoRaReceive(void *pvParameters)
 {
+  commInterface_t *manager = (commInterface_t *)pvParameters;
+
   for(;;)
   {
     if(xSemaphoreTake(loraSemaphore, (TickType_t )portMAX_DELAY) == pdTRUE)
     {
       while (LoRa.available())
-        processLoRaCharReception((char)LoRa.read(), &loraSerialBuffer);
+        processCharReception((char)LoRa.read(), manager);
 
       xSemaphoreGive(loraSemaphore);
       vTaskSuspend(NULL);   // A task se suspende
@@ -82,10 +50,11 @@ static void taskLoRaReceive(void *pvParameters)
 static void taskLoRaSend(void *pvParameters)
 {
   char txPacket[MAX_PACKET_SIZE];
+  commInterface_t *manager = (commInterface_t *)pvParameters;
 
   for(;;)
   {
-    if(xQueueReceive(messageLoRaQueue, &txPacket, (TickType_t)portMAX_DELAY) == pdPASS)
+    if(xQueueReceive(manager->transmissionQueue, &txPacket, (TickType_t)portMAX_DELAY) == pdPASS)
     {
       if(xSemaphoreTake(loraSemaphore, (TickType_t)portMAX_DELAY) == pdTRUE)
       {
@@ -100,6 +69,23 @@ static void taskLoRaSend(void *pvParameters)
       xSemaphoreGive(loraSemaphore);
     }
   }
+}
+
+void initLoRaManager(commInterface_t *manager)
+{  
+  LoRa.setPins(csPin, resetPin, irqPin);
+
+  if (!LoRa.begin(433E6)) 
+  {
+    sendMessageWithNewLine("Erro ao iniciar modulo LoRa. Verifique a coenxao dos seus pinos!! ", PRIORITY_SELECT);
+    while (true);
+  }
+  sendMessageWithNewLine("Modulo LoRa iniciado com sucesso!!! :) ", PRIORITY_SELECT);
+  xTaskCreate(taskLoRaSend, "LoRaSend", 8192, manager, 2, NULL);
+  xTaskCreate(taskLoRaReceive, "LoRaEvent", 8192, manager, 2, &taskLoRaReceiveHandle);
+  vTaskSuspend(taskLoRaReceiveHandle);
+  LoRa.onReceive(onLoRaReceive);
+  LoRa.receive();
 }
 
 //==================================================================================================
