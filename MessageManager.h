@@ -13,6 +13,24 @@
 #define MESSAGE_QUEUE_SIZE         5
 
 //==================================================================================================
+// Comandos do módulo
+//==================================================================================================
+#define CMD_MESSAGE               0x40
+#define CMD_MESSAGE_ECHO          0x80
+#define CMD_GET_DATETIME          0x81
+#define CMD_SET_DATETIME          0x82
+#define CMD_GET_SAMPLES           0x83
+#define CMD_GET_CONTROL_CONFIG    0x84
+#define CMD_SET_CONTROL_CONFIG    0x85
+#define CMD_GET_ALARM_FREQUENCY   0x86
+#define CMD_SET_ALARM_FREQUENCY   0x87
+#define CMD_SAVE_CONFIG           0x88
+#define CMD_POWER_DOWN            0x89
+#define CMD_REQUEST_MESSAGE       0x90
+#define CMD_HALT_TIMEOUT          0x91
+
+
+//==================================================================================================
 // Tipos de dados padrão
 //==================================================================================================
 typedef struct

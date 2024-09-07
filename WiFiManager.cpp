@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <NetBIOS.h>
 #include <AsyncUDP.h>
+#include <Firebase_ESP_Client.h>
 #include "SystemDefinitions.h"
 #include "MessageManager.h"
 
@@ -11,12 +12,22 @@
 // Variáveis do módulo
 //==================================================================================================
 xTaskHandle taskOnline;
+xTaskHandle taskOnlineTransmission;
 xTaskHandle taskOffline;
 AsyncUDP udp;
 
 int connectionIdleCounter = 0;
 int disconnectedCounter = 0;
 bool connectedToClient=false;
+
+FirebaseJson json;
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+String uid, databasePath;
+
+WiFiServer server(5000);
+WiFiClient client;
 
 //==================================================================================================
 // Funções
@@ -47,8 +58,10 @@ bool isClientConnected(void)
 
 void resetWiFiConnection(void)
 {
+  server.close();
   WiFi.disconnect();
   vTaskSuspend(taskOnline);
+  vTaskSuspend(taskOnlineTransmission);
   vTaskResume(taskOffline);
 }
 
@@ -85,6 +98,43 @@ void setupUDP(void)
   }
 }
 
+void setupFirebase(void)
+{
+  // Define a API Key para o banco de dados Firebase
+  config.api_key = WEB_API_KEY;
+
+  // Define as credenciais de usuário para o acesso ao banco de dados
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  // Atribui o link para a base de dados
+  config.database_url = DATABASE_LINK;
+
+  // Conecta à base de dados, ou reconecta caso a conexão anterior tenha sido perdida.
+  Firebase.reconnectWiFi(true);
+  fbdo.setResponseSize(4096);
+
+  // Todo: adaptar a função para o sistemas de mensagens do módulo
+  // Assign the callback function for the long running token generation task
+  //config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
+  
+  // Atribuir o máximo de tentativas de geração de token
+  config.max_token_generation_retry = 5;
+
+  // Inicializando a biblioteca com os dados configurados.
+  Firebase.begin(&config, &auth);
+
+  sendMessageWithNewLine("Obtendo UID do Firebase.", DIRECT_TO_SERIAL);
+  while ((auth.token.uid) == "") 
+    vTaskDelay( 10 / portTICK_PERIOD_MS );
+
+  uid = auth.token.uid.c_str();
+  sendMessage("User UID: ", DIRECT_TO_SERIAL);
+  sendMessageWithNewLine(uid, DIRECT_TO_SERIAL);
+
+  databasePath = "/UsersData/" + uid + "/amostras";
+}
+
 void taskCheckWiFiStatus(void *pvParameters)
 {
   for(;;)
@@ -100,7 +150,9 @@ void taskCheckWiFiStatus(void *pvParameters)
         sendMessage("Hostname: ", DIRECT_TO_SERIAL);
         sendMessageWithNewLine(WiFi.getHostname(), DIRECT_TO_SERIAL);
         vTaskResume(taskOnline);
+        vTaskResume(taskOnlineTransmission);
         setupUDP();
+        setupFirebase();
         vTaskSuspend(NULL);   // A task se suspende
         break;
       case WL_NO_SHIELD:
@@ -154,15 +206,77 @@ void taskCheckWiFiStatus(void *pvParameters)
   }
 }
 
+uint16_t bcdToInt(uint8_t data)
+{
+  return ((((data & 0xF0) >> 4) * 10) + (data & 0x0F));
+}
+
+float getVoltage(uint16_t value)
+{
+  return ((3.3f/1024) * value);
+}
+
+void sendDataToDatabase(char *packet)
+{
+  if(packet[3] == CMD_GET_SAMPLES)  // Só envia amostras para a base de dados
+  {
+    char printBuffer[20];
+    String parentPath;
+
+    sprintf(printBuffer, "%02d/%02d/%04d %02d:%02d:%02d", bcdToInt(packet[6]), bcdToInt(packet[7]), bcdToInt(packet[4]) + 2000,
+                                                          bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
+    json.set("/instant", String(printBuffer));
+    json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
+    json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
+    json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
+    json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
+    json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
+    json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
+    json.set("/valvula1", String((uint8_t)packet[24]));
+    json.set("/valvula2", String((uint8_t)packet[25]));
+    json.set("/valvula3", String((uint8_t)packet[26]));
+    json.set("/valvula4", String((uint8_t)packet[27]));
+    json.set("/valvula5", String((uint8_t)packet[28]));
+    json.set("/valvula6", String((uint8_t)packet[29]));
+
+    // Cria um timestamp para a base de dados
+    sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
+                                                      bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
+    parentPath = databasePath + "/" + String(printBuffer);
+    Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
+  }
+}
+
 void transmissionScheduler(void *pvParameters)
 {
   commInterface_t *manager = (commInterface_t *)pvParameters;
-  WiFiServer server(5000);
-  WiFiClient client;
   char txPacket[MAX_PACKET_SIZE];
+
+  for(;;)
+  {
+    if(xQueueReceive(manager->transmissionQueue, &txPacket, (TickType_t)portMAX_DELAY) == pdPASS)
+    {
+      if(isClientConnected())
+      {
+        int length = txPacket[2] + 3;
+        
+        client.write(txPacket, length);
+        client.flush();
+      }
+
+      if(Firebase.ready())
+        sendDataToDatabase(txPacket);
+    }
+  }
+}
+
+void taskWiFiServer(void *pvParameters)
+{
+  commInterface_t *manager = (commInterface_t *)pvParameters;
 
   sendMessageWithNewLine("Task servidor iniciada.", DIRECT_TO_SERIAL);
   server.begin();
+  
   for(;;)
   {
     client = server.available();
@@ -173,14 +287,6 @@ void transmissionScheduler(void *pvParameters)
       connectedToClient = true;
       while (client.connected())
       {
-        if(xQueueReceive(manager->transmissionQueue, &txPacket, (TickType_t)0) == pdPASS)
-        {
-          int length = txPacket[2] + 3;
-          
-          client.write(txPacket, length);
-          client.flush();
-        }
-        
         if(client.available())
         {
           char receivedData = client.read();
@@ -207,8 +313,10 @@ void initWiFiManager(commInterface_t *manager)
   setupWiFi();
 
   xTaskCreate(taskCheckWiFiStatus, "CheckWiFiStatus", 8192, NULL, 1, &taskOffline);
-  xTaskCreate(transmissionScheduler, "TransmissionScheduler", 8192, manager, 1, &taskOnline);
+  xTaskCreate(taskWiFiServer, "taskWiFiServer", 8192, manager, 1, &taskOnline);
+  xTaskCreate(transmissionScheduler, "TransmissionScheduler", 8192, manager, 1, &taskOnlineTransmission);
   vTaskSuspend(taskOnline);
+  vTaskSuspend(taskOnlineTransmission);
 
   sendMessageWithNewLine("Gerenciador de WiFi configurado.", DIRECT_TO_SERIAL);
   sendMessageWithNewLine("Iniciar conexao...", DIRECT_TO_SERIAL);

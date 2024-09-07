@@ -20,10 +20,8 @@ static void taskSelectQueue(void *pvParameters)
   {
     if(xQueueReceive(selectQueue, &txBuffer, (TickType_t)portMAX_DELAY) == pdPASS)
     {
-        if(isClientConnected())
-          xQueueSend(wifiComm.transmissionQueue, (void *)txBuffer, (TickType_t)0);
-        else
-          xQueueSend(serialComm.transmissionQueue, (void *)txBuffer, (TickType_t)0);
+      xQueueSend(wifiComm.transmissionQueue, (void *)txBuffer, (TickType_t)0);
+      xQueueSend(serialComm.transmissionQueue, (void *)txBuffer, (TickType_t)0);
     }
   }
 }
