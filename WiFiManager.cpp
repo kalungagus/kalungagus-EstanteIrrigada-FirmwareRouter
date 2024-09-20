@@ -5,6 +5,7 @@
 #include <NetBIOS.h>
 #include <AsyncUDP.h>
 #include <Firebase_ESP_Client.h>
+#include "time.h"
 #include "SystemDefinitions.h"
 #include "MessageManager.h"
 
@@ -49,6 +50,11 @@ bool isWiFiConnected(void)
     return(true);
   else
     return(false);
+}
+
+bool isFirebaseReady(void)
+{
+  return Firebase.ready();
 }
 
 bool isClientConnected(void)
@@ -151,6 +157,7 @@ void taskCheckWiFiStatus(void *pvParameters)
         sendMessageWithNewLine(WiFi.getHostname(), DIRECT_TO_SERIAL);
         vTaskResume(taskOnline);
         vTaskResume(taskOnlineTransmission);
+        configTime(DEFAULT_GMT_OFFSET_SEC, DEFAULT_DAYLIGHT_OFFSET_SEC, DEFAULT_NTP_SERVER);
         setupUDP();
         setupFirebase();
         vTaskSuspend(NULL);   // A task se suspende
@@ -206,45 +213,44 @@ void taskCheckWiFiStatus(void *pvParameters)
   }
 }
 
-uint16_t bcdToInt(uint8_t data)
-{
-  return ((((data & 0xF0) >> 4) * 10) + (data & 0x0F));
-}
-
 float getVoltage(uint16_t value)
 {
   return ((3.3f/1024) * value);
 }
 
-void sendDataToDatabase(char *packet)
+bool sendDataToDatabase(char *packet)
 {
-  if(packet[3] == CMD_GET_SAMPLES)  // Só envia amostras para a base de dados
-  {
-    char printBuffer[20];
-    String parentPath;
+  char printBuffer[30];
+  String parentPath;
+  bool response;
 
-    sprintf(printBuffer, "%02d/%02d/%04d %02d:%02d:%02d", bcdToInt(packet[6]), bcdToInt(packet[7]), bcdToInt(packet[4]) + 2000,
-                                                          bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
-    json.set("/instant", String(printBuffer));
-    json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
-    json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
-    json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
-    json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
-    json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
-    json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
-    json.set("/valvula1", String((uint8_t)packet[24]));
-    json.set("/valvula2", String((uint8_t)packet[25]));
-    json.set("/valvula3", String((uint8_t)packet[26]));
-    json.set("/valvula4", String((uint8_t)packet[27]));
-    json.set("/valvula5", String((uint8_t)packet[28]));
-    json.set("/valvula6", String((uint8_t)packet[29]));
+  sprintf(printBuffer, "%04d-%02d-%02dT%02d:%02d:%02d-03:00", bcdToInt(packet[4]) + 2000, bcdToInt(packet[7]), bcdToInt(packet[6]),
+                                                              bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
+  /*sprintf(printBuffer, "%02d/%02d/%04d %02d:%02d:%02d", bcdToInt(packet[6]), bcdToInt(packet[7]), bcdToInt(packet[4]) + 2000,
+                                                        bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));*/
+  json.set("/instant", String(printBuffer));
+  json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
+  json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
+  json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
+  json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
+  json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
+  json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
+  json.set("/valvula1", String((uint8_t)packet[24]));
+  json.set("/valvula2", String((uint8_t)packet[25]));
+  json.set("/valvula3", String((uint8_t)packet[26]));
+  json.set("/valvula4", String((uint8_t)packet[27]));
+  json.set("/valvula5", String((uint8_t)packet[28]));
+  json.set("/valvula6", String((uint8_t)packet[29]));
 
-    // Cria um timestamp para a base de dados
-    sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
-                                                      bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
-    parentPath = databasePath + "/" + String(printBuffer);
-    Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
-  }
+  // Cria um timestamp para a base de dados
+  sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
+                                                    bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
+  parentPath = databasePath + "/" + String(printBuffer);
+  response = Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
+  if(!response)
+    sendMessageWithNewLine(fbdo.errorReason(), PRIORITY_SELECT);
+
+  return response;
 }
 
 void transmissionScheduler(void *pvParameters)
@@ -263,9 +269,6 @@ void transmissionScheduler(void *pvParameters)
         client.write(txPacket, length);
         client.flush();
       }
-
-      if(Firebase.ready())
-        sendDataToDatabase(txPacket);
     }
   }
 }
@@ -280,7 +283,6 @@ void taskWiFiServer(void *pvParameters)
   for(;;)
   {
     client = server.available();
-
     if(client)
     {
       sendMessageWithNewLine("Conexao com cliente estabelecida.", DIRECT_TO_SERIAL);
@@ -314,7 +316,7 @@ void initWiFiManager(commInterface_t *manager)
 
   xTaskCreate(taskCheckWiFiStatus, "CheckWiFiStatus", 8192, NULL, 1, &taskOffline);
   xTaskCreate(taskWiFiServer, "taskWiFiServer", 8192, manager, 1, &taskOnline);
-  xTaskCreate(transmissionScheduler, "TransmissionScheduler", 8192, manager, 1, &taskOnlineTransmission);
+  xTaskCreate(transmissionScheduler, "TransmissionScheduler", 10000, manager, 1, &taskOnlineTransmission);
   vTaskSuspend(taskOnline);
   vTaskSuspend(taskOnlineTransmission);
 
