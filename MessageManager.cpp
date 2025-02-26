@@ -1,6 +1,7 @@
 //==================================================================================================
 // Includes
 //==================================================================================================
+#include <math.h>
 #include "SystemDefinitions.h"
 #include "WiFiManager.h"
 #include "SerialManager.h"
@@ -255,6 +256,7 @@ static bool isDateTimeUpdated(struct tm *time1)
     result &= (time1->tm_hour == timeinfo.tm_hour);
     result &= (time1->tm_wday == timeinfo.tm_wday);
     result &= (time1->tm_min == timeinfo.tm_min);
+    result &= (abs(timeinfo.tm_sec - time1->tm_sec) < 10);
   }
 
   return result;
@@ -315,7 +317,7 @@ static void processModuleActionRequest(struct tm *packetTimeStamp)
   switch(ModuleOperationMode)
   {
     case MODULE_NORMAL_OPERATION:
-      if(!isDateTimeUpdated(packetTimeStamp))
+      if(!isDateTimeUpdated(packetTimeStamp) && packetTimeStamp->tm_sec > 10 && packetTimeStamp->tm_sec < 50)
       {
         if (loadDateTimeToBuffer(tmpBuffer))
           sendCmdBuff(ROUTER_COMMAND | COMMAND_SOURCE_ROUTER | CMD_SET_DATETIME, tmpBuffer, sizeof(tmpBuffer), DIRECT_TO_LORA);
@@ -338,7 +340,6 @@ static void processModuleActionRequest(struct tm *packetTimeStamp)
 static void taskInternalCommandHandler(void *pvParameters)
 {
   char txBuffer[MAX_PACKET_SIZE];
-  uint8_t retransmissionCounter;
   
   for(;;)
   {
@@ -351,21 +352,20 @@ static void taskInternalCommandHandler(void *pvParameters)
           sendDateTime(getPacketOrigin(txBuffer[3]));
         }
               
-        if(isFirebaseReady() && ((txBuffer[3] & COMMAND_MASK) == CMD_SEND_SAMPLES))
+        if((txBuffer[3] & COMMAND_MASK) == CMD_SEND_SAMPLES)
         {
-          // Espera enviar para o servidor
-          retransmissionCounter = 0;
-          while(!sendDataToDatabase(txBuffer) && retransmissionCounter < MAX_RETRANSMISSIONS)
-          {
-            vTaskDelay( 10 / portTICK_PERIOD_MS );
-            retransmissionCounter++;
-          }
+          sendDataToDatabase(txBuffer);
         }
       }
 
       if((txBuffer[3] & COMMAND_MASK) == CMD_SET_TIMEOUT)
       {
         processSetTimeout(getPacketOrigin(txBuffer[3]), txBuffer[4]);
+      }
+
+      if((txBuffer[3] & COMMAND_MASK) == CMD_POWER_DOWN)
+      {
+        ModuleOperationMode = MODULE_NORMAL_OPERATION;
       }
 
       if(((txBuffer[3] & COMMAND_MASK) == CMD_REQUEST_ACTION) && (getPacketOrigin(txBuffer[3]) == COMMAND_SOURCE_MODULE))
@@ -385,6 +385,9 @@ void initMessageManager(void)
   memset(&wifiComm, 0, sizeof(wifiComm));
   memset(&loraComm, 0, sizeof(loraComm));
 
+  serialComm.ID = 0;
+  wifiComm.ID = 1;
+  loraComm.ID = 2;
   serialComm.transmissionQueue = xQueueCreate(MESSAGE_QUEUE_SIZE, MAX_PACKET_SIZE);
   wifiComm.transmissionQueue = xQueueCreate(MESSAGE_QUEUE_SIZE, MAX_PACKET_SIZE);
   loraComm.transmissionQueue = xQueueCreate(MESSAGE_QUEUE_SIZE, MAX_PACKET_SIZE);

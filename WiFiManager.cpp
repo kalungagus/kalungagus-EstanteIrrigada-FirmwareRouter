@@ -5,6 +5,7 @@
 #include <NetBIOS.h>
 #include <AsyncUDP.h>
 #include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
 #include "time.h"
 #include "SystemDefinitions.h"
 #include "MessageManager.h"
@@ -19,7 +20,8 @@ AsyncUDP udp;
 
 int connectionIdleCounter = 0;
 int disconnectedCounter = 0;
-bool connectedToClient=false;
+bool connectedToClient = false;
+bool firebaseServerReady = false;
 
 FirebaseJson json;
 FirebaseData fbdo;
@@ -54,7 +56,15 @@ bool isWiFiConnected(void)
 
 bool isFirebaseReady(void)
 {
-  return Firebase.ready();
+  return firebaseServerReady;
+}
+
+// A documentação do módulo de Firebase diz para chamar Firebase.ready() repetidamente
+// para processamento de tarefas de autenticação, então criei esta função e a flag
+// para usá-la nos possíveis loops.
+void checkFireBaseServer(void)
+{
+  firebaseServerReady = Firebase.ready();
 }
 
 bool isClientConnected(void)
@@ -104,6 +114,20 @@ void setupUDP(void)
   }
 }
 
+// Substitui a função padrão para utilizar as funções de impressão definidas pelo projeto.
+void myTokenStatusCallback(TokenInfo info)
+{
+  if (info.status == token_status_error)
+  {
+    sendMessageWithNewLine("Token info: type = " + String(getTokenType(info)) + "status = " + String(getTokenStatus(info)), DIRECT_TO_SERIAL);
+    sendMessageWithNewLine("Token error: " + getTokenError(info), DIRECT_TO_SERIAL);
+  }
+  else
+  {
+    sendMessageWithNewLine("Token info: type = " + String(getTokenType(info)) + "status = " + String(getTokenStatus(info)), DIRECT_TO_SERIAL);
+  }
+}
+
 void setupFirebase(void)
 {
   // Define a API Key para o banco de dados Firebase
@@ -115,6 +139,14 @@ void setupFirebase(void)
 
   // Atribui o link para a base de dados
   config.database_url = DATABASE_LINK;
+
+  // Define a função de callback 
+  config.token_status_callback = myTokenStatusCallback;
+
+  // Explicação do código de exemplo:
+  // Since Firebase v4.4.x, BearSSL engine was used, the SSL buffer need to be set.
+  // Large data transmission may require larger RX buffer, otherwise connection issue or data read time out can be occurred.
+  //fbdo.setBSSLBufferSize(2048 /* Rx buffer size in bytes from 512 - 16384 */, 1024 /* Tx buffer size in bytes from 512 - 16384 */);
 
   // Conecta à base de dados, ou reconecta caso a conexão anterior tenha sido perdida.
   Firebase.reconnectWiFi(true);
@@ -141,6 +173,12 @@ void setupFirebase(void)
   databasePath = "/UsersData/" + uid + "/amostras";
 }
 
+// Baseado em https://randomnerdtutorials.com/esp32-ntp-timezones-daylight-saving/
+void setTimezone(String timezone){
+  setenv("TZ",timezone.c_str(),1);  //  Adjust the TZ.  Clock settings are adjusted to show the new local time
+  tzset();
+}
+
 void taskCheckWiFiStatus(void *pvParameters)
 {
   for(;;)
@@ -157,7 +195,8 @@ void taskCheckWiFiStatus(void *pvParameters)
         sendMessageWithNewLine(WiFi.getHostname(), DIRECT_TO_SERIAL);
         vTaskResume(taskOnline);
         vTaskResume(taskOnlineTransmission);
-        configTime(DEFAULT_GMT_OFFSET_SEC, DEFAULT_DAYLIGHT_OFFSET_SEC, DEFAULT_NTP_SERVER);
+        configTime(0, 0, DEFAULT_NTP_SERVER);
+        setTimezone(DEFAULT_TIMEZONE);
         setupUDP();
         setupFirebase();
         vTaskSuspend(NULL);   // A task se suspende
@@ -218,8 +257,9 @@ float getVoltage(uint16_t value)
   return ((3.3f/1024) * value);
 }
 
-bool sendDataToDatabase(char *packet)
+void sendDataToDatabase(char *packet)
 {
+  uint8_t retransmissionCounter = 0;
   char printBuffer[30];
   String parentPath;
   bool response;
@@ -246,11 +286,20 @@ bool sendDataToDatabase(char *packet)
   sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
                                                     bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
   parentPath = databasePath + "/" + String(printBuffer);
-  response = Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
-  if(!response)
-    sendMessageWithNewLine(fbdo.errorReason(), PRIORITY_SELECT);
 
-  return response;
+  // Aguarda o banco de dados ficar disponível
+  while(!isFirebaseReady()) vTaskDelay( 10 / portTICK_PERIOD_MS );
+
+  do
+  {
+    response = Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
+    if(!response)
+    {
+      sendMessageWithNewLine("Erro no envio: " + fbdo.errorReason(), PRIORITY_SELECT);
+      retransmissionCounter++;
+      vTaskDelay( 10 / portTICK_PERIOD_MS );
+    }
+  } while (!response && retransmissionCounter < MAX_RETRANSMISSIONS);
 }
 
 void transmissionScheduler(void *pvParameters)
@@ -282,6 +331,8 @@ void taskWiFiServer(void *pvParameters)
   
   for(;;)
   {
+    checkFireBaseServer();
+
     client = server.available();
     if(client)
     {
@@ -295,6 +346,8 @@ void taskWiFiServer(void *pvParameters)
           processCharReception(receivedData, manager);
         }
         
+        checkFireBaseServer();
+
         vTaskDelay( 10 / portTICK_PERIOD_MS );
       }
       sendMessageWithNewLine("Conexao com cliente encerrada.", DIRECT_TO_SERIAL);

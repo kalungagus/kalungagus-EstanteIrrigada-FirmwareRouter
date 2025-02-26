@@ -15,7 +15,7 @@ extern bool isWiFiConnected(void);
 extern bool isFirebaseReady(void);
 extern void resetWiFiConnection(void);
 extern bool isClientConnected(void);
-extern bool sendDataToDatabase(char *packet);
+extern void sendDataToDatabase(char *packet);
 
 #endif
 //==================================================================================================

@@ -34,8 +34,7 @@
 // Parâmetros do servidor de horários
 //--------------------------------------------------------------------------------------------------
 #define DEFAULT_NTP_SERVER           "a.st1.ntp.br"
-#define DEFAULT_GMT_OFFSET_SEC       -14400
-#define DEFAULT_DAYLIGHT_OFFSET_SEC  3600
+#define DEFAULT_TIMEZONE             "<-03>3"
 #define UPDATE_MODULE_RTC_PACKETS    60              // 60 pacotes de requisição dá 10 minutos
 
 //--------------------------------------------------------------------------------------------------

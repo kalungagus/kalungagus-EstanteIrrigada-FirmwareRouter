@@ -44,6 +44,7 @@
 //==================================================================================================
 typedef struct
 {
+  unsigned char ID;
   unsigned char state;
   unsigned char messageSize;
   unsigned char bytesReaded;
