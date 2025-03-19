@@ -6,6 +6,7 @@
 #include "WiFiManager.h"
 #include "SerialManager.h"
 #include "LoRaManager.h"
+#include "DataBase.h"
 
 //==================================================================================================
 // Definições para a máquina de estados do modo de configuração.
@@ -407,8 +408,8 @@ void initMessageManager(void)
   initWiFiManager(&wifiComm);
   initLoRaManager(&loraComm);
 
-  xTaskCreate(taskSelectQueue, "taskSelectQueue", 8192, NULL, 2, NULL);
-  xTaskCreate(taskInternalCommandHandler, "taskInternalCommandHandler", 8192, NULL, 2, NULL);
+  xTaskCreate(taskSelectQueue, "taskSelectQueue", 8192, NULL, 1, NULL);
+  xTaskCreate(taskInternalCommandHandler, "taskInternalCommandHandler", 8192, NULL, 1, NULL);
 }
 
 //==================================================================================================

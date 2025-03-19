@@ -11,7 +11,7 @@
 #define DIRECT_TO_SERIAL           1
 #define DIRECT_TO_LORA             2
 #define MAX_PACKET_SIZE            50
-#define MESSAGE_QUEUE_SIZE         5
+#define MESSAGE_QUEUE_SIZE         8
 
 //==================================================================================================
 // Máscaras de comandos

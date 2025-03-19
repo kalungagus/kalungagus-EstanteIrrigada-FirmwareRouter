@@ -19,12 +19,13 @@ const int irqPin = 21;         // Pino DI0
 
 //==================================================================================================
 // Vetores de interrupção
+// Baseado em https://www.freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/03-As-counting-semaphore
 //==================================================================================================
 void onLoRaReceive(int packetSize)
 {
-  BaseType_t xYieldRequired;
-  xYieldRequired = xTaskResumeFromISR(taskLoRaReceiveHandle);
-  portYIELD_FROM_ISR(xYieldRequired);
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  vTaskNotifyGiveFromISR(taskLoRaReceiveHandle, &xHigherPriorityTaskWoken);
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 //==================================================================================================
@@ -33,16 +34,24 @@ void onLoRaReceive(int packetSize)
 static void taskLoRaReceive(void *pvParameters)
 {
   commInterface_t *manager = (commInterface_t *)pvParameters;
+  uint32_t ulNotifiedValue;
 
   for(;;)
   {
-    if(xSemaphoreTake(loraSemaphore, (TickType_t )portMAX_DELAY) == pdTRUE)
-    {
-      while (LoRa.available())
-        processCharReception((char)LoRa.read(), manager);
+    ulNotifiedValue = ulTaskNotifyTakeIndexed(0, pdTRUE, (TickType_t )portMAX_DELAY);
 
-      xSemaphoreGive(loraSemaphore);
-      vTaskSuspend(NULL);   // A task se suspende
+    if(ulNotifiedValue > 0)
+    {
+      if(xSemaphoreTake(loraSemaphore, (TickType_t )portMAX_DELAY) == pdTRUE)
+      {
+        while (LoRa.available())
+        {
+          processCharReception((char)LoRa.read(), manager);
+          vTaskDelay( 1 );  // Delay rápido para o FreeRTOS atender outras tasks
+        }
+
+        xSemaphoreGive(loraSemaphore);
+      }
     }
   }
 }
@@ -62,7 +71,11 @@ static void taskLoRaSend(void *pvParameters)
 
         LoRa.beginPacket();
         for(uint8_t index = 0; index < length; index++)
+        {
           LoRa.write(txPacket[index]);
+          vTaskDelay( 1 );  // Delay rápido para o FreeRTOS atender outras tasks
+        }
+
         LoRa.endPacket();
       }
       LoRa.receive();
@@ -82,8 +95,7 @@ void initLoRaManager(commInterface_t *manager)
   }
   sendMessageWithNewLine("Modulo LoRa iniciado com sucesso!!! :) ", PRIORITY_SELECT);
   xTaskCreate(taskLoRaSend, "LoRaSend", 8192, manager, 2, NULL);
-  xTaskCreate(taskLoRaReceive, "LoRaEvent", 8192, manager, 2, &taskLoRaReceiveHandle);
-  vTaskSuspend(taskLoRaReceiveHandle);
+  xTaskCreatePinnedToCore(taskLoRaReceive, "LoRaEvent", 8192, manager, 4, &taskLoRaReceiveHandle, 0);
   LoRa.onReceive(onLoRaReceive);
   LoRa.receive();
 }

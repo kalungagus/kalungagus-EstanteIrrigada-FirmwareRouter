@@ -4,11 +4,10 @@
 #include <WiFi.h>
 #include <NetBIOS.h>
 #include <AsyncUDP.h>
-#include <Firebase_ESP_Client.h>
-#include <addons/TokenHelper.h>
 #include "time.h"
 #include "SystemDefinitions.h"
 #include "MessageManager.h"
+#include "DataBase.h"
 
 //==================================================================================================
 // Variáveis do módulo
@@ -21,13 +20,6 @@ AsyncUDP udp;
 int connectionIdleCounter = 0;
 int disconnectedCounter = 0;
 bool connectedToClient = false;
-bool firebaseServerReady = false;
-
-FirebaseJson json;
-FirebaseData fbdo;
-FirebaseAuth auth;
-FirebaseConfig config;
-String uid, databasePath;
 
 WiFiServer server(5000);
 WiFiClient client;
@@ -52,19 +44,6 @@ bool isWiFiConnected(void)
     return(true);
   else
     return(false);
-}
-
-bool isFirebaseReady(void)
-{
-  return firebaseServerReady;
-}
-
-// A documentação do módulo de Firebase diz para chamar Firebase.ready() repetidamente
-// para processamento de tarefas de autenticação, então criei esta função e a flag
-// para usá-la nos possíveis loops.
-void checkFireBaseServer(void)
-{
-  firebaseServerReady = Firebase.ready();
 }
 
 bool isClientConnected(void)
@@ -114,67 +93,9 @@ void setupUDP(void)
   }
 }
 
-// Substitui a função padrão para utilizar as funções de impressão definidas pelo projeto.
-void myTokenStatusCallback(TokenInfo info)
-{
-  if (info.status == token_status_error)
-  {
-    sendMessageWithNewLine("Token info: type = " + String(getTokenType(info)) + "status = " + String(getTokenStatus(info)), DIRECT_TO_SERIAL);
-    sendMessageWithNewLine("Token error: " + getTokenError(info), DIRECT_TO_SERIAL);
-  }
-  else
-  {
-    sendMessageWithNewLine("Token info: type = " + String(getTokenType(info)) + "status = " + String(getTokenStatus(info)), DIRECT_TO_SERIAL);
-  }
-}
-
-void setupFirebase(void)
-{
-  // Define a API Key para o banco de dados Firebase
-  config.api_key = WEB_API_KEY;
-
-  // Define as credenciais de usuário para o acesso ao banco de dados
-  auth.user.email = USER_EMAIL;
-  auth.user.password = USER_PASSWORD;
-
-  // Atribui o link para a base de dados
-  config.database_url = DATABASE_LINK;
-
-  // Define a função de callback 
-  config.token_status_callback = myTokenStatusCallback;
-
-  // Explicação do código de exemplo:
-  // Since Firebase v4.4.x, BearSSL engine was used, the SSL buffer need to be set.
-  // Large data transmission may require larger RX buffer, otherwise connection issue or data read time out can be occurred.
-  //fbdo.setBSSLBufferSize(2048 /* Rx buffer size in bytes from 512 - 16384 */, 1024 /* Tx buffer size in bytes from 512 - 16384 */);
-
-  // Conecta à base de dados, ou reconecta caso a conexão anterior tenha sido perdida.
-  Firebase.reconnectWiFi(true);
-  fbdo.setResponseSize(4096);
-
-  // Todo: adaptar a função para o sistemas de mensagens do módulo
-  // Assign the callback function for the long running token generation task
-  //config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
-  
-  // Atribuir o máximo de tentativas de geração de token
-  config.max_token_generation_retry = 5;
-
-  // Inicializando a biblioteca com os dados configurados.
-  Firebase.begin(&config, &auth);
-
-  sendMessageWithNewLine("Obtendo UID do Firebase.", DIRECT_TO_SERIAL);
-  while ((auth.token.uid) == "") 
-    vTaskDelay( 10 / portTICK_PERIOD_MS );
-
-  uid = auth.token.uid.c_str();
-  sendMessage("User UID: ", DIRECT_TO_SERIAL);
-  sendMessageWithNewLine(uid, DIRECT_TO_SERIAL);
-
-  databasePath = "/UsersData/" + uid + "/amostras";
-}
-
 // Baseado em https://randomnerdtutorials.com/esp32-ntp-timezones-daylight-saving/
-void setTimezone(String timezone){
+void setTimezone(String timezone)
+{
   setenv("TZ",timezone.c_str(),1);  //  Adjust the TZ.  Clock settings are adjusted to show the new local time
   tzset();
 }
@@ -198,7 +119,7 @@ void taskCheckWiFiStatus(void *pvParameters)
         configTime(0, 0, DEFAULT_NTP_SERVER);
         setTimezone(DEFAULT_TIMEZONE);
         setupUDP();
-        setupFirebase();
+        setupDataBase();
         vTaskSuspend(NULL);   // A task se suspende
         break;
       case WL_NO_SHIELD:
@@ -229,6 +150,7 @@ void taskCheckWiFiStatus(void *pvParameters)
         connectToWiFi();
         break;
       case WL_DISCONNECTED:
+        disconnectDataBase();
         disconnectedCounter++;
         if(disconnectedCounter >= MAX_DISCONNECTED_MESSAGES)
         {
@@ -243,6 +165,7 @@ void taskCheckWiFiStatus(void *pvParameters)
         }
         break;
       case WL_STOPPED:
+        disconnectDataBase();
         sendMessageWithNewLine("WL_STOPPED retornado.", DIRECT_TO_SERIAL);
         connectToWiFi();
         break;
@@ -250,56 +173,6 @@ void taskCheckWiFiStatus(void *pvParameters)
         break;
     }
   }
-}
-
-float getVoltage(uint16_t value)
-{
-  return ((3.3f/1024) * value);
-}
-
-void sendDataToDatabase(char *packet)
-{
-  uint8_t retransmissionCounter = 0;
-  char printBuffer[30];
-  String parentPath;
-  bool response;
-
-  sprintf(printBuffer, "%04d-%02d-%02dT%02d:%02d:%02d-03:00", bcdToInt(packet[4]) + 2000, bcdToInt(packet[7]), bcdToInt(packet[6]),
-                                                              bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
-  /*sprintf(printBuffer, "%02d/%02d/%04d %02d:%02d:%02d", bcdToInt(packet[6]), bcdToInt(packet[7]), bcdToInt(packet[4]) + 2000,
-                                                        bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));*/
-  json.set("/instant", String(printBuffer));
-  json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
-  json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
-  json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
-  json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
-  json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
-  json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
-  json.set("/valvula1", String((uint8_t)packet[24]));
-  json.set("/valvula2", String((uint8_t)packet[25]));
-  json.set("/valvula3", String((uint8_t)packet[26]));
-  json.set("/valvula4", String((uint8_t)packet[27]));
-  json.set("/valvula5", String((uint8_t)packet[28]));
-  json.set("/valvula6", String((uint8_t)packet[29]));
-
-  // Cria um timestamp para a base de dados
-  sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
-                                                    bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
-  parentPath = databasePath + "/" + String(printBuffer);
-
-  // Aguarda o banco de dados ficar disponível
-  while(!isFirebaseReady()) vTaskDelay( 10 / portTICK_PERIOD_MS );
-
-  do
-  {
-    response = Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
-    if(!response)
-    {
-      sendMessageWithNewLine("Erro no envio: " + fbdo.errorReason(), PRIORITY_SELECT);
-      retransmissionCounter++;
-      vTaskDelay( 10 / portTICK_PERIOD_MS );
-    }
-  } while (!response && retransmissionCounter < MAX_RETRANSMISSIONS);
 }
 
 void transmissionScheduler(void *pvParameters)
@@ -331,8 +204,6 @@ void taskWiFiServer(void *pvParameters)
   
   for(;;)
   {
-    checkFireBaseServer();
-
     client = server.available();
     if(client)
     {
@@ -345,9 +216,6 @@ void taskWiFiServer(void *pvParameters)
           char receivedData = client.read();
           processCharReception(receivedData, manager);
         }
-        
-        checkFireBaseServer();
-
         vTaskDelay( 10 / portTICK_PERIOD_MS );
       }
       sendMessageWithNewLine("Conexao com cliente encerrada.", DIRECT_TO_SERIAL);
@@ -375,6 +243,8 @@ void initWiFiManager(commInterface_t *manager)
 
   sendMessageWithNewLine("Gerenciador de WiFi configurado.", DIRECT_TO_SERIAL);
   sendMessageWithNewLine("Iniciar conexao...", DIRECT_TO_SERIAL);
+
+  initDataBaseManager();
 }
 
 //==================================================================================================

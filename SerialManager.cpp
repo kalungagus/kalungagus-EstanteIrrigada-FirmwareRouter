@@ -15,9 +15,9 @@ static xTaskHandle taskSerialReceiveHandle;
 //==================================================================================================
 void onSerialReceive(void)
 {
-  BaseType_t xYieldRequired;
-  xYieldRequired = xTaskResumeFromISR(taskSerialReceiveHandle);
-  portYIELD_FROM_ISR(xYieldRequired);
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  vTaskNotifyGiveFromISR(taskSerialReceiveHandle, &xHigherPriorityTaskWoken);
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 //==================================================================================================
@@ -26,16 +26,24 @@ void onSerialReceive(void)
 static void taskSerialReceive(void *pvParameters)
 {
   commInterface_t *manager = (commInterface_t *)pvParameters;
+  uint32_t ulNotifiedValue;
 
   for(;;)
   {
-    if(xSemaphoreTake(serialSemaphore, (TickType_t)portMAX_DELAY) == pdTRUE)
-    {
-      while(Serial.available())
-        processCharReception((char)Serial.read(), manager);
+    ulNotifiedValue = ulTaskNotifyTakeIndexed(0, pdTRUE, (TickType_t )portMAX_DELAY);
 
-      xSemaphoreGive(serialSemaphore);
-      vTaskSuspend(NULL);   // A task se suspende
+    if(ulNotifiedValue > 0)
+    {
+      if(xSemaphoreTake(serialSemaphore, (TickType_t)portMAX_DELAY) == pdTRUE)
+      {
+        while(Serial.available())
+        {
+          processCharReception((char)Serial.read(), manager);
+          vTaskDelay( 1 );  // Delay rápido para o FreeRTOS atender outras tasks
+        }
+
+        xSemaphoreGive(serialSemaphore);
+      }
     }
   }
 }
@@ -65,8 +73,7 @@ void initSerialManager(commInterface_t *manager)
 {
   Serial.begin(115200);
   xTaskCreate(taskSerialSend, "SerialSend", 2000, manager, 2, NULL);
-  xTaskCreate(taskSerialReceive, "SerialEvent", 2000, manager, 2, &taskSerialReceiveHandle);
-  vTaskSuspend(taskSerialReceiveHandle);
+  xTaskCreatePinnedToCore(taskSerialReceive, "SerialEvent", 2000, manager, 3, &taskSerialReceiveHandle, 0);
   Serial.onReceive(onSerialReceive);
 }
 
