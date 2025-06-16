@@ -11,6 +11,7 @@ extern void initDataBaseManager(void);
 extern void setupDataBase(void);
 extern void sendDataToDatabase(char *packet);
 extern void disconnectDataBase(void);
+extern void setSendDataToServerEnabled(bool value);
 
 #endif _DATABASE_MANAGER_
 //==================================================================================================

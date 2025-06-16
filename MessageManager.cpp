@@ -364,6 +364,12 @@ static void taskInternalCommandHandler(void *pvParameters)
         processSetTimeout(getPacketOrigin(txBuffer[3]), txBuffer[4]);
       }
 
+      if(((txBuffer[3] & COMMAND_MASK) == CMD_SET_SEND_TO_SERVER) && (getPacketOrigin(txBuffer[3]) == COMMAND_SOURCE_SOFTWARE))
+      {
+        setSendDataToServerEnabled(txBuffer[4]);
+        sendMessageWithNewLine("Envio para o BD foi alterado com sucesso.", PRIORITY_SELECT);
+      }
+
       if((txBuffer[3] & COMMAND_MASK) == CMD_POWER_DOWN)
       {
         ModuleOperationMode = MODULE_NORMAL_OPERATION;

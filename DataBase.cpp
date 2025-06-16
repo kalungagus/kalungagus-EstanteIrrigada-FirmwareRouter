@@ -18,6 +18,7 @@ FirebaseAuth auth;
 FirebaseConfig config;
 String uid, databasePath;
 bool firebaseServerReady = false;
+bool sendDataToServerEnabled = true;
 
 //==================================================================================================
 // Funções
@@ -43,6 +44,11 @@ void sendDataToDatabase(char *packet)
   xQueueSend(dataBaseMessages, (void *)packet, (TickType_t)0);
 }
 
+void setSendDataToServerEnabled(bool value)
+{
+  sendDataToServerEnabled = value;
+}
+
 float getVoltage(uint16_t value)
 {
   return ((3.3f/1024) * value);
@@ -56,33 +62,42 @@ bool formatAndUploadData(char *packet)
 
   sprintf(printBuffer, "%04d-%02d-%02dT%02d:%02d:%02d-03:00", bcdToInt(packet[4]) + 2000, bcdToInt(packet[7]), bcdToInt(packet[6]),
                                                               bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
-  json.set("/instant", String(printBuffer));
-  json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
-  json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
-  json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
-  json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
-  json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
-  json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
-  json.set("/valvula1", String((uint8_t)packet[24]));
-  json.set("/valvula2", String((uint8_t)packet[25]));
-  json.set("/valvula3", String((uint8_t)packet[26]));
-  json.set("/valvula4", String((uint8_t)packet[27]));
-  json.set("/valvula5", String((uint8_t)packet[28]));
-  json.set("/valvula6", String((uint8_t)packet[29]));
 
-  // Cria um timestamp para a base de dados
-  sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
-                                                    bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
-  parentPath = databasePath + "/" + String(printBuffer);
+  if(sendDataToServerEnabled)
+  {
+    json.set("/instant", String(printBuffer));
+    json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
+    json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
+    json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
+    json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
+    json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
+    json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
+    json.set("/valvula1", String((uint8_t)packet[24]));
+    json.set("/valvula2", String((uint8_t)packet[25]));
+    json.set("/valvula3", String((uint8_t)packet[26]));
+    json.set("/valvula4", String((uint8_t)packet[27]));
+    json.set("/valvula5", String((uint8_t)packet[28]));
+    json.set("/valvula6", String((uint8_t)packet[29]));
 
-  // As tarefas executadas aqui tomam um bom tempo. Se o servidor demorar também, o watchdog é ativado.
-  // Assim, estou colocando este vTaskDelay para que o sistema possa executar algumas tarefas,
-  // incluindo o tratamento de watchdog.
-  vTaskDelay( 1 / portTICK_PERIOD_MS );
-  
-  response = Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
-  if(!response)
-    sendMessageWithNewLine("Erro no envio: " + fbdo.errorReason(), PRIORITY_SELECT);
+    // Cria um timestamp para a base de dados
+    sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
+                                                      bcdToInt(packet[8]), bcdToInt(packet[11]), bcdToInt(packet[10]));
+    parentPath = databasePath + "/" + String(printBuffer);
+
+    // As tarefas executadas aqui tomam um bom tempo. Se o servidor demorar também, o watchdog é ativado.
+    // Assim, estou colocando este vTaskDelay para que o sistema possa executar algumas tarefas,
+    // incluindo o tratamento de watchdog.
+    vTaskDelay( 1 / portTICK_PERIOD_MS );
+    
+    response = Firebase.RTDB.setJSON(&fbdo, parentPath.c_str(), &json);
+    if(!response)
+      sendMessageWithNewLine("Erro no envio: " + fbdo.errorReason(), PRIORITY_SELECT);
+  }
+  else
+  {
+    sendMessageWithNewLine(String(printBuffer), PRIORITY_SELECT);
+    response = true;
+  }
 
   return response;
 }
@@ -100,6 +115,7 @@ void setupDataBase(void)
 
   // Define um timeout de resposta para o Banco de dados.
   Firebase.RTDB.setReadTimeout(&fbdo, 10000);
+  Firebase.config.timeout.serverResponse = 5000; // em milissegundos
 
   // Todo: adaptar a função para o sistemas de mensagens do módulo
   // Assign the callback function for the long running token generation task

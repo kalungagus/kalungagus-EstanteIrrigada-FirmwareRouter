@@ -90,7 +90,8 @@ void initLoRaManager(commInterface_t *manager)
 
   if (!LoRa.begin(433E6)) 
   {
-    sendMessageWithNewLine("Erro ao iniciar modulo LoRa. Verifique a coenxao dos seus pinos!! ", PRIORITY_SELECT);
+    sendMessageWithNewLine("Erro ao iniciar modulo LoRa.", PRIORITY_SELECT);
+    sendMessageWithNewLine("Verifique a conexao dos seus pinos!! ", PRIORITY_SELECT);
     while (true);
   }
   sendMessageWithNewLine("Modulo LoRa iniciado com sucesso!!! :) ", PRIORITY_SELECT);
