@@ -50,6 +50,7 @@ typedef struct
   unsigned char messageSize;
   unsigned char bytesReaded;
   unsigned char originMask;
+  unsigned char crc;
   QueueHandle_t transmissionQueue;
   QueueHandle_t forwardQueue;
   char packet[MAX_PACKET_SIZE];
@@ -68,6 +69,7 @@ extern void sendMessageWithNewLine(String, unsigned int destiny);
 extern void sendCmdBuff(unsigned char cmd, char *buff, unsigned int length, unsigned int destiny);
 extern void sendCmd(unsigned char cmd, unsigned int destiny);
 extern void sendAck(unsigned char cmd, unsigned int destiny);
+extern void sendEnq(unsigned char cmd, unsigned int destiny);
 extern void loadIntoArray(uint32_t value, char *buffer);
 
 #endif

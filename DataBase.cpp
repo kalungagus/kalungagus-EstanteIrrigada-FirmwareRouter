@@ -66,18 +66,21 @@ bool formatAndUploadData(char *packet)
   if(sendDataToServerEnabled)
   {
     json.set("/instant", String(printBuffer));
-    json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[12]))));
-    json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[14]))));
-    json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[16]))));
-    json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[18]))));
-    json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[20]))));
-    json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[22]))));
-    json.set("/valvula1", String((uint8_t)packet[24]));
-    json.set("/valvula2", String((uint8_t)packet[25]));
-    json.set("/valvula3", String((uint8_t)packet[26]));
-    json.set("/valvula4", String((uint8_t)packet[27]));
-    json.set("/valvula5", String((uint8_t)packet[28]));
-    json.set("/valvula6", String((uint8_t)packet[29]));
+    json.set("/vss", String(getVoltage(*((uint16_t *)&packet[12]))));
+    json.set("/vdd", String(getVoltage(*((uint16_t *)&packet[14]))));
+    json.set("/vbg", String(getVoltage(*((uint16_t *)&packet[16]))));
+    json.set("/sensor1", String(getVoltage(*((uint16_t *)&packet[18]))));
+    json.set("/sensor2", String(getVoltage(*((uint16_t *)&packet[20]))));
+    json.set("/sensor3", String(getVoltage(*((uint16_t *)&packet[22]))));
+    json.set("/sensor4", String(getVoltage(*((uint16_t *)&packet[24]))));
+    json.set("/sensor5", String(getVoltage(*((uint16_t *)&packet[26]))));
+    json.set("/sensor6", String(getVoltage(*((uint16_t *)&packet[28]))));
+    json.set("/valvula1", String((uint8_t)packet[30]));
+    json.set("/valvula2", String((uint8_t)packet[31]));
+    json.set("/valvula3", String((uint8_t)packet[32]));
+    json.set("/valvula4", String((uint8_t)packet[33]));
+    json.set("/valvula5", String((uint8_t)packet[34]));
+    json.set("/valvula6", String((uint8_t)packet[35]));
 
     // Cria um timestamp para a base de dados
     sprintf(printBuffer, "%02d%02d%02d%02d%02d%02d",  bcdToInt(packet[4]), bcdToInt(packet[7]), bcdToInt(packet[6]),
@@ -115,7 +118,6 @@ void setupDataBase(void)
 
   // Define um timeout de resposta para o Banco de dados.
   Firebase.RTDB.setReadTimeout(&fbdo, 10000);
-  Firebase.config.timeout.serverResponse = 5000; // em milissegundos
 
   // Todo: adaptar a função para o sistemas de mensagens do módulo
   // Assign the callback function for the long running token generation task
